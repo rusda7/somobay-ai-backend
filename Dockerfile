@@ -1,1 +1,0 @@
-RUN unzip chroma_db.zip && rm chroma_db.zip
