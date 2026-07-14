@@ -2,16 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# unzip ইনস্টল লাগবে শুধু
-RUN apt-get update && apt-get install -y unzip
+# llama-cpp-python বিল্ড করার জন্য cmake, g++, git লাগবে
+RUN apt-get update && apt-get install -y build-essential cmake git unzip
 
-# Render নিজেই LFS সহ সব ফাইল কপি করে দিবে
 COPY . .
 
-# chroma_db আনজিপ করেন
 RUN unzip chroma_db.zip && rm chroma_db.zip
 
-# Python প্যাকেজ ইনস্টল
+# CMAKE_ARGS দিলে CPU-only বিল্ড হবে, GPU ছাড়া
+ENV CMAKE_ARGS="-DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS"
+ENV FORCE_CMAKE=1
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 10000
