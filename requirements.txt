@@ -1,6 +1,6 @@
 fastapi==0.115.0
 uvicorn==0.30.6
-chromadb==0.5.5
+chromadb==1.5.9
 llama-cpp-python==0.2.90
 pypdf==4.3.1
 sentence-transformers==3.0.1
