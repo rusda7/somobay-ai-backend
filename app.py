@@ -9,7 +9,7 @@ import chromadb
 
 load_dotenv()
 
-app = FastAPI(title="Somobay AI", version="2.2.0")
+app = FastAPI(title="Somobay AI", version="2.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Groq সেটআপ ---
+# --- Groq ---
 GROQ_KEY = os.environ.get("GROQ_API_KEY")
 print(f"GROQ_API_KEY Found: {bool(GROQ_KEY)}")
 
@@ -34,18 +34,21 @@ except Exception as e:
     print(f"Groq client init failed: {e}")
     client = None
 
-# --- ChromaDB নেটিভ ক্লায়েন্ট ---
+# --- ChromaDB Native ---
 try:
     chroma_client = chromadb.PersistentClient(path="chroma_db")
-    # আপনার chroma_db তে collection এর নাম কি? সাধারণত "langchain" থাকে
-    # যদি না জানেন, প্রথমে সব collection এর নাম প্রিন্ট করে দেখেন
-    collections = chroma_client.list_collections()
-    print(f"Available collections: {[c.name for c in collections]}")
+    # সব collection এর নাম দেখেন
+    collection_list = chroma_client.list_collections()
+    print(f"Available collections: {[c.name for c in collection_list]}")
     
-    # ধরে নিলাম নাম "langchain", না হলে এখানে চেঞ্জ করবেন
-    collection_name = collections[0].name if collections else "langchain"
-    db = chroma_client.get_collection(name=collection_name)
-    print(f"ChromaDB loaded successfully. Collection: {collection_name}")
+    # প্রথম collection টা নেন। আপনার DB তে যেই নাম আছে সেটা অটো নিবে
+    if collection_list:
+        db = collection_list[0]
+        print(f"ChromaDB loaded successfully. Collection: {db.name}, Count: {db.count()}")
+    else:
+        db = None
+        print("ChromaDB: No collections found")
+        
 except Exception as e:
     print(f"ChromaDB load failed: {e}")
     db = None
@@ -76,7 +79,7 @@ def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="প্রশ্ন খালি রাখা যাবে না।")
     
     try:
-        # ChromaDB নেটিভ query - embedding অটো ইউজ হবে DB থেকে
+        # ChromaDB নেটিভ query - আপনার DB তে অলরেডি embedding আছে
         results = db.query(
             query_texts=[request.question],
             n_results=4
@@ -84,6 +87,12 @@ def ask_question(request: QueryRequest):
         
         docs = results['documents'][0] if results['documents'] else []
         metadatas = results['metadatas'][0] if results['metadatas'] else []
+        
+        if not docs:
+            return QueryResponse(
+                answer="দুঃখিত, আমার ডাটাবেসে এই তথ্যটি এখন নেই।", 
+                sources=[]
+            )
         
         context_text = "\n\n---\n\n".join(docs)
         sources = [m.get('source', 'Unknown') for m in metadatas]
