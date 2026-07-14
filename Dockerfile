@@ -2,14 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y git git-lfs unzip && git lfs install
+# Build tools + git-lfs লাগবে
+RUN apt-get update && apt-get install -y build-essential cmake git git-lfs unzip curl && git lfs install
 
 COPY . .
 
-RUN git lfs pull
+# LFS ফাইল টানবে আর unzip করবে। এরর হলেও বিল্ড থামবে না
+RUN git lfs pull || true
+RUN unzip -o chroma_db.zip || echo "chroma_db.zip not found, skipping"
 
-RUN unzip chroma_db.zip && rm chroma_db.zip
-
+ENV CMAKE_ARGS="-DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS"
+ENV FORCE_CMAKE=1
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 10000
