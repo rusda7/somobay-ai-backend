@@ -5,11 +5,11 @@ from pydantic import BaseModel
 from groq import Groq
 import httpx
 from dotenv import load_dotenv
-from langchain_community.vectorstores import Chroma
+import chromadb
 
 load_dotenv()
 
-app = FastAPI(title="Somobay AI", version="2.1.0")
+app = FastAPI(title="Somobay AI", version="2.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,11 +34,18 @@ except Exception as e:
     print(f"Groq client init failed: {e}")
     client = None
 
-# --- ChromaDB সেটআপ - Embedding ছাড়া ---
+# --- ChromaDB নেটিভ ক্লায়েন্ট ---
 try:
-    # আপনার chroma_db তে অলরেডি embedding আছে, তাই নতুন করে লাগবে না
-    db = Chroma(persist_directory="chroma_db")
-    print("ChromaDB loaded successfully")
+    chroma_client = chromadb.PersistentClient(path="chroma_db")
+    # আপনার chroma_db তে collection এর নাম কি? সাধারণত "langchain" থাকে
+    # যদি না জানেন, প্রথমে সব collection এর নাম প্রিন্ট করে দেখেন
+    collections = chroma_client.list_collections()
+    print(f"Available collections: {[c.name for c in collections]}")
+    
+    # ধরে নিলাম নাম "langchain", না হলে এখানে চেঞ্জ করবেন
+    collection_name = collections[0].name if collections else "langchain"
+    db = chroma_client.get_collection(name=collection_name)
+    print(f"ChromaDB loaded successfully. Collection: {collection_name}")
 except Exception as e:
     print(f"ChromaDB load failed: {e}")
     db = None
@@ -53,9 +60,10 @@ class QueryResponse(BaseModel):
 @app.get("/")
 def read_root():
     return {
-        "status": "Somobay AI is Live with RAG!",
+        "status": "Somobay AI is Live!",
         "groq_status": "OK" if client else "GROQ_API_KEY missing",
-        "db_status": "OK" if db else "ChromaDB missing"
+        "db_status": "OK" if db else "ChromaDB missing",
+        "db_count": db.count() if db else 0
     }
 
 @app.post("/ask", response_model=QueryResponse)
@@ -68,11 +76,17 @@ def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="প্রশ্ন খালি রাখা যাবে না।")
     
     try:
-        # ChromaDB থেকে সার্চ - আপনার DB তে অলরেডি embedding আছে
-        docs = db.similarity_search(request.question, k=4)
+        # ChromaDB নেটিভ query - embedding অটো ইউজ হবে DB থেকে
+        results = db.query(
+            query_texts=[request.question],
+            n_results=4
+        )
         
-        context_text = "\n\n---\n\n".join([doc.page_content for doc in docs])
-        sources = [doc.metadata.get('source', 'Unknown') for doc in docs]
+        docs = results['documents'][0] if results['documents'] else []
+        metadatas = results['metadatas'][0] if results['metadatas'] else []
+        
+        context_text = "\n\n---\n\n".join(docs)
+        sources = [m.get('source', 'Unknown') for m in metadatas]
 
         chat_completion = client.chat.completions.create(
             messages=[
