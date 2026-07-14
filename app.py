@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # ChromaDB এর জন্য নতুন ইম্পোর্ট
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 load_dotenv()
 
