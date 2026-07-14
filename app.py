@@ -3,12 +3,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
-import httpx # এই লাইনটা অ্যাড করেন
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Somobay AI", version="1.0.0")
+app = FastAPI(title="Somobay AI", version="1.0.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,10 +21,9 @@ app.add_middleware(
 GROQ_KEY = os.environ.get("GROQ_API_KEY")
 print(f"GROQ_API_KEY Found: {bool(GROQ_KEY)}")
 
-# এইটা আসল ফিক্স: httpx ক্লায়েন্ট নিজে বানায়ে Groq কে দিলাম
 try:
     if GROQ_KEY:
-        http_client = httpx.Client() # proxies ছাড়া ক্লায়েন্ট
+        http_client = httpx.Client()
         client = Groq(api_key=GROQ_KEY, http_client=http_client)
         print("Groq client initialized successfully")
     else:
@@ -65,7 +64,7 @@ def ask_question(request: QueryRequest):
                 {"role": "system", "content": f"তুমি একজন বাংলাদেশী সমবায় আইন বিশেষজ্ঞ। নিচের প্রসঙ্গ ব্যবহার করে উত্তর দাও।\n\nপ্রসঙ্গ:\n{SOMOBAY_LAW_CONTEXT}"},
                 {"role": "user", "content": request.question}
             ],
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant", # এইটা নতুন মডেল
             temperature=0.2,
             max_tokens=1024,
         )
