@@ -17,7 +17,11 @@ app.add_middleware(
 
 # ভেক্টর DB লোড
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
-collection = chroma_client.get_collection("somobay_law")
+try:
+    collection = chroma_client.get_collection("somobay_law")
+except:
+    collection = chroma_client.create_collection("somobay_law")
+    # ডাটা আবার ইনজেস্ট করতে হবে, কিন্তু অ্যাপ ক্র্যাশ করবে না
 
 # LLM লোড - CPU তে চলবে
 llm = Llama(
