@@ -1,107 +1,84 @@
+# app.py v4.0 - Trust & Accuracy Mode
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
-import httpx
+import httpx, chromadb
+from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
-import chromadb
 
 load_dotenv()
+app = FastAPI(title="Somobay AI v4 - Trust Mode")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app = FastAPI(title="Somobay AI", version="3.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Groq ---
 GROQ_KEY = os.environ.get("GROQ_API_KEY")
-print(f"GROQ_API_KEY Found: {bool(GROQ_KEY)}")
+groq_client = Groq(api_key=GROQ_KEY, http_client=httpx.Client()) if GROQ_KEY else None
+embed_model = SentenceTransformer('l3cube-pune/indic-sentence-bert-nli')
 
-try:
-    if GROQ_KEY:
-        http_client = httpx.Client()
-        client = Groq(api_key=GROQ_KEY, http_client=http_client)
-        print("Groq client initialized successfully")
-    else:
-        client = None
-except Exception as e:
-    print(f"Groq init failed: {e}")
-    client = None
-
-# --- ChromaDB 1.5.9 ---
-db = None
 try:
     chroma_client = chromadb.PersistentClient(path="chroma_db")
-    cols = chroma_client.list_collections()
-    print(f"Available collections: {[c.name for c in cols]}")
-
-    if cols:
-        db = cols[0]
-        print(f"ChromaDB loaded: {db.name}, count: {db.count()}")
-    else:
-        db = None
-except Exception as e:
-    print(f"ChromaDB load failed: {e}")
+    db = chroma_client.get_collection("somobay_law")
+    print(f"DB Count: {db.count()}")
+except:
     db = None
 
 class QueryRequest(BaseModel):
     question: str
-
 class QueryResponse(BaseModel):
     answer: str
-    sources: list[str] = []
+    sources: list[str]
+    confidence: str
 
 @app.get("/")
-def read_root():
-    return {
-        "status": "Somobay AI Live v3.0 with ChromaDB 1.5.9",
-        "groq": "OK" if client else "Missing",
-        "db": "OK" if db else "Missing",
-        "count": db.count() if db else 0
-    }
+def root(): return {"status": "Trust Mode v4", "count": db.count() if db else 0}
 
 @app.post("/ask", response_model=QueryResponse)
-def ask_question(request: QueryRequest):
-    if not client:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY missing")
-    if not db:
-        raise HTTPException(status_code=500, detail="ChromaDB not loaded")
-    if not request.question.strip():
-        raise HTTPException(status_code=400, detail="প্রশ্ন খালি")
+def ask(req: QueryRequest):
+    q_emb = embed_model.encode(req.question).tolist()
+    results = db.query(query_embeddings=[q_emb], n_results=8)
+    docs = results['documents'][0]
+    metas = results['metadatas'][0]
+    dists = results['distances'][0]
 
-    try:
-        results = db.query(query_texts=[request.question], n_results=4)
-        docs = results.get('documents', [[]])[0]
-        metadatas = results.get('metadatas', [[]])[0]
-
-        if not docs:
-            return QueryResponse(answer="দুঃখিত, ডাটাবেসে এই তথ্যটি নেই।", sources=[])
-
-        context = "\n\n---\n\n".join(docs)
-        sources = [m.get('source', 'Unknown') for m in metadatas]
-
-        completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": f"""তুমি বাংলাদেশী সমবায় আইন বিশেষজ্ঞ। নাম Somobay AI।
-                প্রসঙ্গ দিয়ে উত্তর দাও। সহজ বাংলায়। না থাকলে বলবে 'ডাটাবেসে নেই'।
-
-                প্রসঙ্গ:
-                {context}
-                """},
-                {"role": "user", "content": request.question}
-            ],
-            model="llama-3.1-8b-instant",
-            temperature=0.1,
-            max_tokens=1024,
+    # শুধু 0.35 এর কম দূরত্ব (90%+ মিল) নিবো
+    good = [(d,m,dist) for d,m,dist in zip(docs, metas, dists) if dist < 0.45]
+    if not good:
+        return QueryResponse(
+            answer="দুঃখিত, আপনার প্রশ্নটি সমবায় সমিতি আইন ২০০১ ও সমবায় সমিতি বিধিমালা ২০০৪ এর মধ্যে সরাসরি পাওয়া যায়নি। অনুগ্রহ করে প্রশ্নটি অন্যভাবে করুন অথবা নিকটস্থ সমবায় অফিসে যোগাযোগ করুন।\n\nআপনি জিজ্ঞাসা করতে পারেন: 'ধারা ১৫ অনুযায়ী নিবন্ধনের শর্ত কি?'",
+            sources=[],
+            confidence="low"
         )
-        answer = completion.choices[0].message.content
-        return QueryResponse(answer=answer, sources=list(set(sources)))
-    except Exception as e:
-        print(f"Ask error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    context = "\n\n--- [{}] ---\n{}\n".format
+    context_text = "\n".join([f"--- উৎস: {m['source']} ---\n{d}" for d,m,_ in good[:4]])
+
+    prompt = f"""তুমি বাংলাদেশের সমবায় অধিদপ্তরের সিনিয়র আইন কর্মকর্তা। তোমার নাম Somobay AI।
+
+কঠোর নিয়ম:
+1. শুধুমাত্র নিচের আইনি CONTEXT থেকে হুবহু তথ্য নিয়ে উত্তর দিবে। নিজের জ্ঞান যোগ করবে না।
+2. উত্তর বাংলায়, সহজ ভাষায়, পয়েন্ট আকারে দিবে।
+3. প্রতিটি তথ্যের শেষে [উৎস: ফাইলের নাম] উল্লেখ করবে। যেমন: [উৎস: somobay_ain_2001.pdf]
+4. যদি সংখ্যা/টাকা/শতাংশ থাকে, CONTEXT থেকে হুবহু কপি করবে, বানাবে না।
+5. ধারা নম্বর থাকলে অবশ্যই উল্লেখ করবে।
+
+CONTEXT:
+{context_text}
+
+প্রশ্ন: {req.question}
+
+উত্তর (বিশ্বস্ত, আইন অনুযায়ী):
+"""
+
+    comp = groq_client.chat.completions.create(
+        messages=[{"role":"user","content":prompt}],
+        model="llama-3.1-8b-instant",
+        temperature=0.0,
+        max_tokens=800
+    )
+
+    return QueryResponse(
+        answer=comp.choices[0].message.content,
+        sources=list(set([m['source'] for _,m,_ in good[:4]])),
+        confidence="high" if good[0][2] < 0.3 else "medium"
+    )
