@@ -9,7 +9,7 @@ import chromadb
 
 load_dotenv()
 
-app = FastAPI(title="Somobay AI", version="2.4.0")
+app = FastAPI(title="Somobay AI", version="3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,22 +31,22 @@ try:
     else:
         client = None
 except Exception as e:
-    print(f"Groq client init failed: {e}")
+    print(f"Groq init failed: {e}")
     client = None
 
-# --- ChromaDB Native v0.4.24 ---
+# --- ChromaDB 1.5.9 ---
+db = None
 try:
     chroma_client = chromadb.PersistentClient(path="chroma_db")
-    collection_list = chroma_client.list_collections()
-    print(f"Available collections: {[c.name for c in collection_list]}")
-    
-    if collection_list:
-        db = collection_list[0] # প্রথম collection টা নিবে
-        print(f"ChromaDB loaded successfully. Collection: {db.name}, Count: {db.count()}")
+    cols = chroma_client.list_collections()
+    print(f"Available collections: {[c.name for c in cols]}")
+
+    if cols:
+        db = cols[0] # প্রথম collection
+        print(f"ChromaDB loaded: {db.name}, count: {db.count()}")
     else:
+        print("No collections found in chroma_db")
         db = None
-        print("ChromaDB: No collections found")
-        
 except Exception as e:
     print(f"ChromaDB load failed: {e}")
     db = None
@@ -61,49 +61,45 @@ class QueryResponse(BaseModel):
 @app.get("/")
 def read_root():
     return {
-        "status": "Somobay AI is Live!",
-        "groq_status": "OK" if client else "GROQ_API_KEY missing",
-        "db_status": "OK" if db else "ChromaDB missing",
-        "db_count": db.count() if db else 0
+        "status": "Somobay AI Live v3.0 with ChromaDB 1.5.9",
+        "groq": "OK" if client else "Missing",
+        "db": "OK" if db else "Missing",
+        "count": db.count() if db else 0
     }
 
 @app.post("/ask", response_model=QueryResponse)
 def ask_question(request: QueryRequest):
     if not client:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY সেট করা নাই")
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY missing")
     if not db:
-        raise HTTPException(status_code=500, detail="ChromaDB লোড হয় নাই")
+        raise HTTPException(status_code=500, detail="ChromaDB not loaded - check logs")
     if not request.question.strip():
-        raise HTTPException(status_code=400, detail="প্রশ্ন খালি রাখা যাবে না।")
-    
+        raise HTTPException(status_code=400, detail="প্রশ্ন খালি")
+
     try:
         results = db.query(
             query_texts=[request.question],
             n_results=4
         )
-        
-        docs = results['documents'][0] if results['documents'] else []
-        metadatas = results['metadatas'][0] if results['metadatas'] else []
-        
+
+        docs = results.get('documents', [[]])[0]
+        metadatas = results.get('metadatas', [[]])[0]
+
         if not docs:
-            return QueryResponse(
-                answer="দুঃখিত, আমার ডাটাবেসে এই তথ্যটি এখন নেই।", 
-                sources=[]
-            )
-        
-        context_text = "\n\n---\n\n".join(docs)
+            return QueryResponse(answer="দুঃখিত, ডাটাবেসে এই তথ্যটি নেই।", sources=[])
+
+        context = "\n\n---\n\n".join(docs)
         sources = [m.get('source', 'Unknown') for m in metadatas]
 
-        chat_completion = client.chat.completions.create(
+        completion = client.chat.completions.create(
             messages=[
                 {
-                    "role": "system", 
-                    "content": f"""তুমি একজন বাংলাদেশী সমবায় আইন বিশেষজ্ঞ। তোমার নাম Somobay AI। 
-                    নিচের 'প্রসঙ্গ' ব্যবহার করে ইউজারের প্রশ্নের উত্তর দাও। 
-                    উত্তর সংক্ষিপ্ত, সহজ বাংলায় দিবে। প্রসঙ্গে না থাকলে বলবে 'দুঃখিত, আমার ডাটাবেসে এই তথ্যটি এখন নেই।'
+                    "role": "system",
+                    "content": f"""তুমি বাংলাদেশী সমবায় আইন বিশেষজ্ঞ। নাম Somobay AI।
+                    প্রসঙ্গ দিয়ে উত্তর দাও। সহজ বাংলায়। না থাকলে বলবে 'ডাটাবেসে নেই'।
 
                     প্রসঙ্গ:
-                    {context_text}
+                    {context}
                     """
                 },
                 {"role": "user", "content": request.question}
@@ -112,9 +108,9 @@ def ask_question(request: QueryRequest):
             temperature=0.1,
             max_tokens=1024,
         )
-        answer = chat_completion.choices[0].message.content
+        answer = completion.choices[0].message.content
         return QueryResponse(answer=answer, sources=list(set(sources)))
 
     except Exception as e:
-        print(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=f"AI সার্ভারে সমস্যা: {str(e)}")
+        print(f"Ask error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
