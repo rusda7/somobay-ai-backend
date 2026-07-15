@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 app = FastAPI(title="Somobay AI v4.1 Lite")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY")
 HF_TOKEN = os.environ.get("HF_TOKEN") # HuggingFace free token
