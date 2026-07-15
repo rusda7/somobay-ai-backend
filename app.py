@@ -42,10 +42,9 @@ try:
     print(f"Available collections: {[c.name for c in cols]}")
 
     if cols:
-        db = cols[0] # প্রথম collection
+        db = cols[0]
         print(f"ChromaDB loaded: {db.name}, count: {db.count()}")
     else:
-        print("No collections found in chroma_db")
         db = None
 except Exception as e:
     print(f"ChromaDB load failed: {e}")
@@ -72,16 +71,12 @@ def ask_question(request: QueryRequest):
     if not client:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY missing")
     if not db:
-        raise HTTPException(status_code=500, detail="ChromaDB not loaded - check logs")
+        raise HTTPException(status_code=500, detail="ChromaDB not loaded")
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="প্রশ্ন খালি")
 
     try:
-        results = db.query(
-            query_texts=[request.question],
-            n_results=4
-        )
-
+        results = db.query(query_texts=[request.question], n_results=4)
         docs = results.get('documents', [[]])[0]
         metadatas = results.get('metadatas', [[]])[0]
 
@@ -93,15 +88,12 @@ def ask_question(request: QueryRequest):
 
         completion = client.chat.completions.create(
             messages=[
-                {
-                    "role": "system",
-                    "content": f"""তুমি বাংলাদেশী সমবায় আইন বিশেষজ্ঞ। নাম Somobay AI।
-                    প্রসঙ্গ দিয়ে উত্তর দাও। সহজ বাংলায়। না থাকলে বলবে 'ডাটাবেসে নেই'।
+                {"role": "system", "content": f"""তুমি বাংলাদেশী সমবায় আইন বিশেষজ্ঞ। নাম Somobay AI।
+                প্রসঙ্গ দিয়ে উত্তর দাও। সহজ বাংলায়। না থাকলে বলবে 'ডাটাবেসে নেই'।
 
-                    প্রসঙ্গ:
-                    {context}
-                    """
-                },
+                প্রসঙ্গ:
+                {context}
+                """},
                 {"role": "user", "content": request.question}
             ],
             model="llama-3.1-8b-instant",
@@ -110,7 +102,6 @@ def ask_question(request: QueryRequest):
         )
         answer = completion.choices[0].message.content
         return QueryResponse(answer=answer, sources=list(set(sources)))
-
     except Exception as e:
         print(f"Ask error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
