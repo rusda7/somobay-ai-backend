@@ -2,8 +2,6 @@ fastapi
 uvicorn
 groq
 python-dotenv
-chromadb
-sentence-transformers
-PyPDF2
+chromadb==1.5.9
 httpx
-torch
+numpy
