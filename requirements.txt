@@ -1,7 +1,7 @@
-fastapi
-uvicorn
-groq
-python-dotenv
-chromadb==1.5.9
-httpx
-numpy
+    fastapi
+    uvicorn
+    groq
+    python-dotenv
+    chromadb==1.5.9
+    httpx
+    numpy
