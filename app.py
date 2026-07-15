@@ -9,7 +9,7 @@ import chromadb
 
 load_dotenv()
 
-app = FastAPI(title="Somobay AI", version="2.3.0")
+app = FastAPI(title="Somobay AI", version="2.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,16 +34,14 @@ except Exception as e:
     print(f"Groq client init failed: {e}")
     client = None
 
-# --- ChromaDB Native ---
+# --- ChromaDB Native v0.4.24 ---
 try:
     chroma_client = chromadb.PersistentClient(path="chroma_db")
-    # সব collection এর নাম দেখেন
     collection_list = chroma_client.list_collections()
     print(f"Available collections: {[c.name for c in collection_list]}")
     
-    # প্রথম collection টা নেন। আপনার DB তে যেই নাম আছে সেটা অটো নিবে
     if collection_list:
-        db = collection_list[0]
+        db = collection_list[0] # প্রথম collection টা নিবে
         print(f"ChromaDB loaded successfully. Collection: {db.name}, Count: {db.count()}")
     else:
         db = None
@@ -79,7 +77,6 @@ def ask_question(request: QueryRequest):
         raise HTTPException(status_code=400, detail="প্রশ্ন খালি রাখা যাবে না।")
     
     try:
-        # ChromaDB নেটিভ query - আপনার DB তে অলরেডি embedding আছে
         results = db.query(
             query_texts=[request.question],
             n_results=4
