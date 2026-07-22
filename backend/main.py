@@ -4,82 +4,123 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 
-app = FastAPI(title="Somobay AI - Final Perfect")
+app = FastAPI(title="Somobay AI - Specific Answer No Ref")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 BASE = pathlib.Path(__file__).parent
 def load(p):
-    try:
-        return p.read_text(encoding='utf-8', errors='ignore') if p.exists() else ""
-    except:
-        return ""
+    try: return p.read_text(encoding='utf-8', errors='ignore') if p.exists() else ""
+    except: return ""
 
 AIN = load(BASE/"ain_2001.txt") or load(pathlib.Path("/mnt/data/ain_2001.txt"))
 BIDI = load(BASE/"bidhimala_2004.txt") or load(pathlib.Path("/mnt/data/bidhimala_2004.txt"))
 CIRC = load(BASE/"circular.txt")
 
-# Accurate counts from file parsing
-# Ain: 13 অধ্যায়, 90 ধারা (মূল গেজেট), Bidhi: 117 বিধি
-META_INFO = {
-    "ain_odhaya": 13,
-    "ain_dhara_original": 90,
-    "ain_dhara_current": 88,  # ২টি ধারা বিলুপ্ত/প্রতিস্থাপিত
-    "bidi_total": 117,
-}
+# Build dhara wise index for accurate specific answers
+def parse_dhara_index(text):
+    idx={}
+    pattern = r'\n\s*([০-৯0-9]+)[।]\s*([^\n]{3,120})\n'
+    matches=list(re.finditer(pattern, text))
+    for i,m in enumerate(matches):
+        num_en = m.group(1).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
+        title = m.group(2).strip()
+        start=m.start()
+        end=matches[i+1].start() if i+1 < len(matches) else start+4000
+        content=text[start:end].strip()[:3500]
+        if len(content)>150:
+            idx[num_en] = {"title": title, "content": content, "num_bn": m.group(1)}
+    return idx
 
-ALL_TEXT = AIN + "\n\n" + BIDI + "\n\n" + CIRC
+AIN_IDX = parse_dhara_index(AIN)
+BIDI_IDX = parse_dhara_index(BIDI)
+
+print(f"Ain indexed: {len(AIN_IDX)}, Bidi indexed: {len(BIDI_IDX)}")
+
+# Topic to Dhara mapping for specific questions
+TOPIC_MAP = {
+    "মেয়াদ": ["18", "১৮"],
+    "মেয়াদ": ["18", "১৮"],
+    "পদ শূন্য": ["20", "২0"],
+    "শূন্য হলে": ["20", "২০"],
+    "যোগ্যতা": ["19", "১৯"],
+    "অযোগ্যতা": ["19", "১৯"],
+    "বিরোধ": ["50", "৫০"],
+    "বিবাদ": ["50", "৫০"],
+    "সদস্য পদ বাতিল": ["17", "১৭"],
+    "ঋণ খেলাপি": ["19", "৮৭"],
+    "সভা না করলে": ["22", "২২"],
+    "সভা": ["22", "২২", "23", "২৩"],
+}
 
 def make_chunks(text, source):
     chunks=[]
-    paras = re.split(r'\n\s*\n', text)
+    paras=re.split(r'\n\s*\n', text)
     buf=""
     for para in paras:
         para=para.strip()
         if len(para)<40: continue
         if re.match(r'^[০-৯0-9]+[।]', para) and len(buf)>300:
-            chunks.append({"text": buf, "source": source})
-            buf=para
+            chunks.append({"text": buf, "source": source}); buf=para
         else:
             buf += "\n\n" + para
-            if len(buf)>1100:
-                chunks.append({"text": buf, "source": source})
-                buf=""
-    if buf:
-        chunks.append({"text": buf, "source": source})
+            if len(buf)>1200:
+                chunks.append({"text": buf, "source": source}); buf=""
+    if buf: chunks.append({"text": buf, "source": source})
     return chunks
 
 ALL_CHUNKS = make_chunks(AIN, "আইন ২০০১") + make_chunks(BIDI, "বিধিমালা ২০০৪")
-if CIRC:
-    ALL_CHUNKS += make_chunks(CIRC, "সার্কুলার")
+if CIRC: ALL_CHUNKS += make_chunks(CIRC, "সার্কুলার")
 
-def tokenize(s):
-    return re.findall(r'[\u0980-\u09FFa-zA-Z0-9]+', s.lower())
+def retrieve_specific(query, k=4):
+    q=query.lower()
+    # 1. Check if query contains number like 50 ধারা
+    nums = re.findall(r'[০-৯0-9]+', query)
+    # Convert bn to en
+    trans=str.maketrans("০১২৩৪৫৬৭৮৯","0123456789")
+    nums_en=[n.translate(trans) for n in nums]
+    
+    results=[]
+    # If number mentioned, directly fetch that dhara
+    for n in nums_en:
+        if n in AIN_IDX:
+            results.append(AIN_IDX[n]["content"])
+        if n in BIDI_IDX:
+            results.append(BIDI_IDX[n]["content"])
+    
+    if results:
+        # Return exact dhara contents as chunks
+        return [{"text": r, "source": "নির্দিষ্ট ধারা"} for r in results[:2]]
 
-def retrieve(query, k=5):
-    q_tokens = [t for t in tokenize(query) if len(t)>1]
-    stop = set(["কি","কত","কোন","এবং","হবে","আছে","করে","থেকে","জন্য","এই","সে","যে","এর","এ","ও","টা","টি","হয়","হইবে","কয়টি"])
-    q_f = [t for t in q_tokens if t not in stop]
-    if not q_f: q_f = q_tokens
+    # 2. Topic mapping
+    for topic, dharas in TOPIC_MAP.items():
+        if topic in query:
+            for d in dharas:
+                d_en = d.translate(trans) if any(c in "০১২৩৪৫৬৭৮৯" for c in d) else d
+                if d_en in AIN_IDX:
+                    results.append(AIN_IDX[d_en]["content"])
+            if results:
+                return [{"text": r, "source": f"বিষয়: {topic}"} for r in results[:2]]
+
+    # 3. General keyword search
+    q_tokens=set(re.findall(r'[\u0980-\u09FFa-zA-Z0-9]+', q))
+    stop=set(["কি","কত","কোন","এবং","হবে","আছে","করে","থেকে","জন্য","এই","সে","যে","এর","এ","ও","টা","টি","হয়","কয়টি","বলুন","দিন"])
+    q_f=[t for t in q_tokens if t not in stop and len(t)>1]
     scored=[]
     for idx,ch in enumerate(ALL_CHUNKS):
-        txt = ch["text"]
-        c_tokens = tokenize(txt)
-        score=0
-        for qt in q_f:
-            score += c_tokens.count(qt)
-        if score>0:
-            scored.append((score, idx))
+        txt=ch["text"]
+        score=sum(1 for qt in q_f if qt in txt.lower())
+        if score>0: scored.append((score, idx))
     scored.sort(reverse=True, key=lambda x:x[0])
-    return [ALL_CHUNKS[i] for sc,i in scored[:k] if sc>=1]
+    top=[ALL_CHUNKS[i] for sc,i in scored[:k] if sc>=1]
+    return top
 
-GROQ_KEY = os.environ.get("GROQ_API_KEY","")
+GROQ_KEY=os.environ.get("GROQ_API_KEY","")
 groq_client=None
 if GROQ_KEY:
     try:
         from groq import Groq
-        groq_client = Groq(api_key=GROQ_KEY)
-    except:
-        pass
+        groq_client=Groq(api_key=GROQ_KEY)
+    except: pass
 
 CACHE={}
 
@@ -88,87 +129,69 @@ class ChatRequest(BaseModel):
     user_id: str="anon"
 class ChatResponse(BaseModel):
     answer: str
-    references: List[str] = []
+    references: List[str] = []  # Always empty - no yellow box
     cached: bool=False
 
 @app.get("/")
 def root():
-    return {"status":"Final", "chunks": len(ALL_CHUNKS), "meta": META_INFO, "groq": groq_client is not None}
+    return {"status":"Specific No Ref", "ain": len(AIN_IDX), "bidi": len(BIDI_IDX), "groq": groq_client is not None}
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    q = req.question.strip()
-    key = q.lower()
+    q=req.question.strip()
+    key=q.lower()
     if key in CACHE:
-        a,r = CACHE[key]
-        return ChatResponse(answer=a, references=r, cached=True)
+        a,_=CACHE[key]
+        return ChatResponse(answer=a, references=[], cached=True)
 
-    # === META QUESTIONS - Direct accurate answer ===
-    q_lower = q.lower()
-    has_odhaya = "অধ্যায়" in q or "অধ্যায়" in q
-    has_dhara = "ধারা" in q
-    has_bidhi = "বিধি" in q
-    
-    if has_odhaya and has_dhara:
-        ans = f"""**সমবায় সমিতি আইন, ২০০১ এ অধ্যায় ও ধারার সংখ্যা:**
+    # Meta count
+    if "অধ্যায়" in q and "ধারা" in q:
+        ans="সমবায় সমিতি আইন, ২০০১ এ মোট ১৩টি অধ্যায় এবং ৯০টি ধারা রয়েছে (মূল গেজেট অনুযায়ী, বর্তমানে ৮৮টি কার্যকর)। বিধিমালা ২০০৪ এ ১১৭টি বিধি রয়েছে।"
+        CACHE[key]=(ans,[]); return ChatResponse(answer=ans, references=[], cached=False)
+    if "বিধি" in q and "কয়টি" in q:
+        ans="সমবায় সমিতি বিধিমালা, ২০০৪ এ মোট ১১৭টি বিধি রয়েছে।"
+        CACHE[key]=(ans,[]); return ChatResponse(answer=ans, references=[], cached=False)
 
-- **মোট অধ্যায়:** {META_INFO['ain_odhaya']} টি অধ্যায়
-- **মোট ধারা (মূল গেজেট ২০০১):** {META_INFO['ain_dhara_original']} টি ধারা (ধারা ১ থেকে ৯০)
-- **বর্তমানে কার্যকর:** {META_INFO['ain_dhara_current']} টি ধারা (সংশোধনীর পর ২টি ধারা বিলুপ্ত)
-
-(আইন ২০০১, ভূমিকা: '১৩টি অধ্যায়ে ৯০টি ধারা সম্বলিত সমবায় সমিতি আইন, ২০০১')
-
-**সমবায় সমিতি বিধিমালা, ২০০৪ এ বিধির সংখ্যা:**
-- **মোট বিধি:** {META_INFO['bidi_total']} টি বিধি (বিধি ১ থেকে ১১৭)"""
-        refs = ["আইন ২০০১ ভূমিকা: ১৩টি অধ্যায়ে ৯০টি ধারা", "বিধিমালা ২০০৪: বিধি ১-১১৭ পর্যন্ত"]
-        CACHE[key]=(ans, refs)
-        return ChatResponse(answer=ans, references=refs, cached=False)
-    
-    if has_bidhi and ("কয়টি" in q or "কতটি" in q):
-        ans = f"""সমবায় সমিতি বিধিমালা, ২০০৪ এ মোট **{META_INFO['bidi_total']} টি বিধি** রয়েছে (বিধি ১ থেকে ১১৭ পর্যন্ত)।
-
-এর সাথে ২৩টি ফরম এবং তফসিল রয়েছে। (বিধিমালা ২০০৪, সূচিপত্র)"""
-        refs = ["বিধিমালা ২০০৪: ১১৭টি বিধি"]
-        CACHE[key]=(ans, refs)
-        return ChatResponse(answer=ans, references=refs, cached=False)
-
-    # === FULL BOOK SEARCH ===
-    relevant = retrieve(q, k=5)
+    relevant=retrieve_specific(q, k=3)
     
     if not relevant:
-        ans = f"দুঃখিত, '{q}' - এই বিষয়ে আইন ও বিধিমালায় সুনির্দিষ্ট তথ্য খুঁজে পাওয়া যায়নি। অনুগ্রহ করে ধারা/বিধি নম্বর বা অন্য শব্দ দিয়ে জিজ্ঞাসা করুন।"
-        CACHE[key]=(ans, [])
-        return ChatResponse(answer=ans, references=[], cached=False)
+        ans=f"'{q}' বিষয়ে আইন ও বিধিমালায় সরাসরি তথ্য পাওয়া যায়নি। ধারা নম্বর দিয়ে জিজ্ঞাসা করুন, যেমন 'ধারা ৫০ কি'।"
+        CACHE[key]=(ans,[]); return ChatResponse(answer=ans, references=[], cached=False)
 
-    context = "\n\n---\n\n".join([f"[{r['source']}]\n{r['text'][:1400]}" for r in relevant[:4]])
-    refs = [f"{r['source']}: {r['text'][:80]}..." for r in relevant[:2]]
+    context="\n\n---\n\n".join([r["text"][:1600] for r in relevant[:2]])
 
     if groq_client:
         try:
-            system = """তুমি বাংলাদেশের সমবায় আইন বিশেষজ্ঞ। পুরো বই পড়ে নির্ভুল উত্তর দাও। 
-- বাংলায়, সহজ, পূর্ণাঙ্গ উত্তর দেবে
-- উত্তরের মধ্যেই (ধারা X, আইন ২০০১) বা (বিধি Y, বিধিমালা ২০০৪) এভাবে inline রেফারেন্স দেবে
-- বানিয়ে বলবে না, শুধু Context থেকে
-- উত্তর ৪-৬ বাক্যে, কেটে যাবে না এমনভাবে শেষ করো"""
-            user_p = f"""Context:
-{context[:8000]}
+            system="""তুমি সমবায় আইন বিশেষজ্ঞ। তোমার কাজ সুনির্দিষ্ট, নির্ভুল উত্তর দেওয়া।
+
+নিয়ম:
+1. প্রথম লাইনেই প্রশ্নের সুনির্দিষ্ট উত্তর দাও (যেমন: মেয়াদ ৩ বছর, পদ শূন্য হলে ৩০ দিনের মধ্যে পূরণ করতে হবে)।
+2. তারপর ২-৩ বাক্যে আইনের ভাষায় ব্যাখ্যা দাও।
+3. উত্তর বাংলায়, সহজ, কিন্তু আইনের মতো নির্ভুল।
+4. কোনো রেফারেন্স লিস্ট বা হলুদ বক্স দেবে না, উত্তরের মধ্যেই ছোট করে (ধারা ১৮) এভাবে উল্লেখ করো।
+5. বানিয়ে বলবে না, শুধু Context থেকে।
+6. উত্তর ১২০ শব্দের মধ্যে রাখো যাতে কেটে না যায়।"""
+
+            user_p=f"""Context (আইনের হুবহু অংশ):
+{context[:7000]}
 
 প্রশ্ন: {q}
 
-উত্তর বাংলায়, inline রেফারেন্সসহ, পূর্ণাঙ্গ কিন্তু সংক্ষিপ্ত (যাতে কেটে না যায়):"""
-            comp = groq_client.chat.completions.create(
+সুনির্দিষ্ট উত্তর দাও (প্রথম লাইনে সরাসরি উত্তর, তারপর ব্যাখ্যা):"""
+
+            comp=groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role":"system","content":system},{"role":"user","content":user_p}],
-                temperature=0.1,
-                max_tokens=800,
+                temperature=0.05,
+                max_tokens=600,
             )
-            final_ans = comp.choices[0].message.content.strip()
-            CACHE[key]=(final_ans, refs)
-            return ChatResponse(answer=final_ans, references=refs, cached=False)
+            final=comp.choices[0].message.content.strip()
+            CACHE[key]=(final,[])
+            return ChatResponse(answer=final, references=[], cached=False)
         except Exception as e:
             print(e)
-    
-    # Fallback
-    ans = relevant[0]["text"][:1500] + f"\n\n({relevant[0]['source']})"
-    CACHE[key]=(ans, refs)
-    return ChatResponse(answer=ans, references=refs, cached=False)
+            ans=relevant[0]["text"][:1200]
+            CACHE[key]=(ans,[]); return ChatResponse(answer=ans, references=[], cached=False)
+    else:
+        ans=relevant[0]["text"][:1200]
+        CACHE[key]=(ans,[]); return ChatResponse(answer=ans, references=[], cached=False)
